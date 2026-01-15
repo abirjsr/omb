@@ -1,0 +1,1000 @@
+import { BadRequestException, Injectable,InternalServerErrorException,NotFoundException, UnauthorizedException } from "@nestjs/common";
+import { v4 as uuidv4 } from 'uuid';
+import { In, IsNull, Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
+import { AdminEntity } from "./admin.entity";
+//import{User} from "./user.interface";
+import { CreateUserDto } from "./admin.dto";
+//import { UpdateAdminDto } from "./update-user.dto";
+import{ UpdateAdminDto } from "./update-admin.dto";
+import { CreateDepartmentDto,UpdateDepartmentDto} from "./department.dto";
+import { Department } from "./department.entity";
+import { Employees } from "../employees/employees.entity";
+
+
+import { InjectRepository } from '@nestjs/typeorm';
+import { isUUID } from "class-validator";
+import { CreateEmployeesDto } from "../employees/employees.dto";
+import { CreateMemorandumDto, UpdateMemorandumDto } from "./memorandum.dto";
+import { Memorandum } from "./memorandum.entity";
+import { CreateTaskDto, UpdateTaskDto } from "./task.dto";
+import { Task } from "./task.entity";
+import { HrEntity } from "../hr/hr.entity";
+import { TaskStatus } from './task.entity'; // Add this import
+import { CreateHrDto, UpdateHrDto } from "../hr/hr.dto";
+import { EmployeeTask, EmployeeTaskStatus } from "./employee-task.entity";
+import{CreateEmployeeTaskDto, SubmitEmployeeTaskDto, UpdateEmployeeTaskDto} from "./employee-task.dto";
+import { EmailService } from "./email.service";
+import * as Pusher from 'pusher';
+
+const pusher = new Pusher({
+  appId: "2049804",
+  key: "2493dde53f4df046b213",
+  secret: "2ef0bb48a465e3a6fdb4",
+  cluster: "mt1",
+  useTLS: true
+});
+
+
+@Injectable()
+export class AdminService {
+     
+    
+    constructor(
+        @InjectRepository(AdminEntity)
+        private adminRepo: Repository<AdminEntity>,
+        @InjectRepository(Department)
+        private departmentRepo: Repository<Department>,
+        @InjectRepository(Employees)
+        private employeeRepo: Repository<Employees>,
+        @InjectRepository(Memorandum)
+        private memorandumRepo: Repository<Memorandum>,
+        @InjectRepository(Task)
+        private taskRepo: Repository<Task>,
+        @InjectRepository(HrEntity)
+        private hrRepo: Repository<HrEntity>,
+        @InjectRepository(EmployeeTask)
+        private employeeTaskRepo: Repository<EmployeeTask>,
+        private readonly emailService: EmailService
+    ) {}
+
+    // create admin 
+
+        async createAdmin(adminData: CreateUserDto): Promise<AdminEntity> {
+         
+        const exixtingAdmin = await this.adminRepo.findOne({
+            where: { phone: adminData.phone }
+        });
+
+        if (exixtingAdmin) {
+            throw new UnauthorizedException('Phone number already exists');
+        }
+
+        const existingAdminByEmail = await this.adminRepo.findOne({
+        where: { Email: adminData.Email }
+    });
+
+    if (existingAdminByEmail) {
+        throw new UnauthorizedException('Email already exists');
+    }
+
+        const admin = this.adminRepo.create(adminData);
+        return await this.adminRepo.save(admin);
+      }
+
+      
+
+
+      async updatePhone(id: string, phone: bigint): Promise<AdminEntity> {
+        
+        const existingAdmin = await this.adminRepo.findOne({
+            where: { phone }
+        });
+
+        if (existingAdmin && existingAdmin.adminId !== id) {
+            throw new UnauthorizedException("This phone number is already in use by another admin");
+        }
+
+        const admin = await this.adminRepo.findOne({
+            where: { adminId: id }
+        });
+
+        if (!admin) {
+            throw new NotFoundException(`Admin with id ${id} not found`);
+        }
+
+        admin.phone = phone;
+        await this.adminRepo.save(admin);
+        return admin;
+      }
+      
+        async getAdminwithFullName(fullName: string): Promise<AdminEntity[]> {
+
+            return this.adminRepo.find({
+                where: { fullName },
+                order: { createdAt: 'DESC' }
+            });
+        }
+
+    //       async deleteAdmin(id: string): Promise<void> {
+    //     const result = await this.adminRepo.delete(id);
+    //     if (result.affected === 0) {
+    //         throw new NotFoundException(`Admin with ID ${id} not found`);
+    //     }
+    // }
+
+    async deleteAdmin(id: string): Promise<void> {
+        
+        if (!isUUID(id)) {
+            throw new BadRequestException('Invalid admin ID format (must be UUID)');
+        }
+
+        const result = await this.adminRepo.delete(id);
+        
+        if (result.affected === 0) {
+            throw new NotFoundException(`Admin with ID ${id} not found`);
+        }
+
+       // { message: 'Admin deleted successfully' };
+    }
+
+        async getAllAdmins(): Promise<AdminEntity[]> {
+            return this.adminRepo.find({
+                order: { createdAt: 'DESC' },
+            });
+        }
+
+    async getAdminWithNullFullName(): Promise<AdminEntity[]> {
+        const admins = await this.adminRepo.find({
+            where: { fullName: IsNull() },
+            order: { createdAt: 'DESC' }
+        });
+
+        if (admins.length === 0) {
+            throw new NotFoundException('No admins found with null fullName');
+        }
+
+        return admins;
+    }
+
+
+
+    
+
+    // department
+    // async createDepartment(adminId: string, createDto: CreateDepartmentDto): Promise<Department> {
+    //     const admin = await this.adminRepo.findOne({ where: {adminId } });
+    //     if (!admin) {
+    //         throw new NotFoundException(`Admin with ID ${adminId} not found`);
+    //     }
+
+    //     const employee = await this.employeeRepo.findOne({
+    //         where: { id: createDto.employeeId },
+    //     });
+    //     if (!employee) {
+    //         throw new NotFoundException(`Employee with ID ${createDto.employeeId} not found`);
+    //     }
+
+    //     const department = this.departmentRepo.create({
+    //         departmentType: createDto.departmentType,
+    //         role: createDto.role,
+    //         admin: admin,
+    //         employee: employee,
+    //         joiningDate: createDto.joiningDate || new Date(),
+    //         isActive: createDto.isActive !== undefined ? createDto.isActive : true,
+    //     });
+
+    //     return this.departmentRepo.save(department);
+    // }
+
+     // admin.service.ts
+async createDepartment(adminEmail: string, createDto: CreateDepartmentDto): Promise<Department> {
+  // Find admin by email instead of ID
+  const admin = await this.adminRepo.findOne({ 
+    where: { Email: adminEmail } 
+  });
+  
+  if (!admin) {
+    throw new NotFoundException(`Admin with email ${adminEmail} not found`);
+  }
+
+  const employee = await this.employeeRepo.findOne({
+    where: { id: createDto.employeeId },
+  });
+  
+  if (!employee) {
+    throw new NotFoundException(`Employee with ID ${createDto.employeeId} not found`);
+  }
+
+  const department = this.departmentRepo.create({
+    departmentType: createDto.departmentType,
+    role: createDto.role,
+    admin: admin,
+    employee: employee,
+    joiningDate: createDto.joiningDate || new Date(),
+    isActive: createDto.isActive !== undefined ? createDto.isActive : true,
+  });
+
+  return this.departmentRepo.save(department);
+}
+
+// async getDepartment(): Promise<Department[]> {
+//   return this.departmentRepo.find();
+// }
+
+ async getAllDepartments(): Promise<Department[]> {
+    return this.departmentRepo.find({
+      relations: ['admin', 'employee'] // Include related entities
+    });
+  }
+
+ async getAdminDepartments(adminId: string): Promise<Department[]> {
+    return this.departmentRepo.find({
+        where:{admin:{adminId}},
+        relations: ['admin', 'employee'],
+    });
+
+}
+
+async getAdminDepartmentsByEmail(adminEmail: string): Promise<Department[]> {
+  return this.departmentRepo.find({
+    where: { admin: { Email: adminEmail } },
+    relations: ['admin', 'employee'],
+  });
+}
+
+async getDepartmentById(id: string, departmentId: string): Promise<Department | null> {
+    return this.departmentRepo.findOne({
+        where: { admin: { adminId: id }, id: departmentId },
+        relations: ['admin', 'employee'],
+    });
+}
+
+ 
+
+async updateDepartmentByAdminEmail(
+  adminEmail: string,
+  employeeId: number,
+  updateDto: UpdateDepartmentDto
+): Promise<Department> {
+  const department = await this.departmentRepo.findOne({
+    where: { 
+      admin: { Email: adminEmail },
+      employee: { id: employeeId }
+    },
+    relations: ['admin', 'employee']
+  });
+
+  if (!department) {
+    throw new NotFoundException('Department not found for this admin and employee combination');
+  }
+
+  // Update fields
+  if (updateDto.departmentType) {
+    department.departmentType = updateDto.departmentType;
+  }
+  if (updateDto.role) {
+    department.role = updateDto.role;
+  }
+  if (updateDto.joiningDate) {
+    department.joiningDate = updateDto.joiningDate;
+  }
+  if (updateDto.isActive !== undefined) {
+    department.isActive = updateDto.isActive;
+  }
+
+  return this.departmentRepo.save(department);
+}
+
+
+async updateDepartmentByEmployee(
+  adminId: string,
+  employeeId: number,
+  updateDto: UpdateDepartmentDto
+): Promise<Department> {
+  // Find department by adminId and employeeId
+  const department = await this.departmentRepo.findOne({
+    where: { 
+      admin: { adminId },
+      employee: { id: employeeId }
+    },
+    relations: ['admin', 'employee']
+  });
+
+  if (!department) {
+    throw new NotFoundException('Department not found for this admin and employee combination');
+  }
+
+  // Update fields
+  if (updateDto.departmentType) {
+    department.departmentType = updateDto.departmentType;
+  }
+  if (updateDto.role) {
+    department.role = updateDto.role;
+  }
+  if (updateDto.joiningDate) {
+    department.joiningDate = updateDto.joiningDate;
+  }
+  if (updateDto.isActive !== undefined) {
+    department.isActive = updateDto.isActive;
+  }
+
+  return this.departmentRepo.save(department);
+}
+
+ 
+async deleteDepartmentByEmail(adminEmail: string): Promise<void> {
+  const result = await this.departmentRepo.delete({
+    
+    admin: { Email: adminEmail }
+  });
+  
+  if (result.affected === 0) {
+    throw new NotFoundException(`Department not found or not owned by admin`);
+  }
+}
+
+
+      async deleteDepartment(adminId: string, departmentId: string): Promise<void> {
+    const result = await this.departmentRepo.delete({
+      id: departmentId,
+      admin: { adminId }
+    });
+    if (result.affected === 0) {
+      throw new NotFoundException(`Department not found or not owned by admin`);
+    }
+  }
+
+     
+
+    // Create memorandum
+      
+//   async createMemorandum(adminId: string, createDto: CreateMemorandumDto) {
+//   const admin = await this.adminRepo.findOne({ 
+//     where: { adminId } 
+//   });
+//   if (!admin) throw new NotFoundException('Admin not found');
+
+//   const memorandum = this.memorandumRepo.create({
+//     ...createDto,
+//     admin // Ensure admin is assigned
+//   });
+  
+//   return this.memorandumRepo.save(memorandum);
+// }
+
+
+async createMemorandum(adminId: string, createDto: CreateMemorandumDto) {
+  const admin = await this.adminRepo.findOne({ 
+    where: { adminId } 
+  });
+  if (!admin) throw new NotFoundException('Admin not found');
+
+  const memorandum = this.memorandumRepo.create({
+    ...createDto,
+    admin // Ensure admin is assigned
+  });
+  
+  const savedMemorandum = await this.memorandumRepo.save(memorandum);
+  
+  // Trigger Pusher event for memorandum creation
+  pusher.trigger('memorandum-channel', 'memorandum-created', {
+    id: savedMemorandum.id,
+    title: savedMemorandum.title,
+    content: savedMemorandum.content,
+    adminId: adminId,
+    adminEmail: admin.Email,
+    createdAt: savedMemorandum.createdAt
+  });
+  
+  return savedMemorandum;
+}
+
+
+    async getAllMemorandums(): Promise<Memorandum[]> {
+        return this.memorandumRepo.find({
+            relations: ['admin'],
+            order: { createdAt: 'DESC' }
+        });
+    }
+
+   async getAdminMemorandums(adminId: string): Promise<Memorandum[]> {
+        return this.memorandumRepo.find({
+            where: { admin: { adminId } },
+            order: { createdAt: 'DESC' },
+   });
+
+}
+//      async updateMemorandum(
+//   adminId: string,
+//   memorandumId: string,
+//   updateDto: UpdateMemorandumDto
+// ): Promise<Memorandum> {
+//   const memorandum = await this.memorandumRepo.findOne({
+//     where: { id: memorandumId, admin: { adminId } },
+//   });
+
+//   if (!memorandum) {
+//     throw new NotFoundException('Memorandum not found or you are not the owner');
+//   }
+
+//   if (updateDto.title) {
+//     memorandum.title = updateDto.title;
+//   }
+//   if (updateDto.content) {
+//     memorandum.content = updateDto.content;
+//   }
+
+//   return this.memorandumRepo.save(memorandum);
+// }
+
+
+async updateMemorandum(
+  adminId: string,
+  memorandumId: string,
+  updateDto: UpdateMemorandumDto
+): Promise<Memorandum> {
+  const memorandum = await this.memorandumRepo.findOne({
+    where: { id: memorandumId, admin: { adminId } },
+  });
+
+  if (!memorandum) {
+    throw new NotFoundException('Memorandum not found or you are not the owner');
+  }
+
+  if (updateDto.title) {
+    memorandum.title = updateDto.title;
+  }
+  if (updateDto.content) {
+    memorandum.content = updateDto.content;
+  }
+
+  const updatedMemorandum = await this.memorandumRepo.save(memorandum);
+  
+  // Trigger Pusher event for memorandum update
+  pusher.trigger('memorandum-channel', 'memorandum-updated', {
+    id: updatedMemorandum.id,
+    title: updatedMemorandum.title,
+    content: updatedMemorandum.content,
+    adminId: adminId
+  });
+
+  return updatedMemorandum;
+}
+
+
+
+// async deleteMemorandum(adminId: string, memorandumId: string): Promise<void> {
+//   const result = await this.memorandumRepo.delete({
+//     id: memorandumId,
+//     admin: { adminId },
+//   });
+
+//   if (result.affected === 0) {
+//     throw new NotFoundException('Memorandum not found or you are not the owner');
+//   }
+
+//     {message: 'Memorandum deleted successfully'};
+// }
+ 
+
+async deleteMemorandum(adminId: string, memorandumId: string): Promise<void> {
+  const result = await this.memorandumRepo.delete({
+    id: memorandumId,
+    admin: { adminId },
+  });
+
+  if (result.affected === 0) {
+    throw new NotFoundException('Memorandum not found or you are not the owner');
+  }
+
+  // Trigger Pusher event for memorandum deletion
+  pusher.trigger('memorandum-channel', 'memorandum-deleted', {
+    id: memorandumId,
+    adminId: adminId,
+    deletedAt: new Date()
+  });
+}
+
+
+
+//hr task assign to hr
+
+async createTask(adminId: string, createDto: CreateTaskDto): Promise<Task> {
+  const admin = await this.adminRepo.findOne({ where: { adminId } });
+  if (!admin) throw new NotFoundException('Admin not found');
+
+  const hr = await this.hrRepo.findOne({ where: { id: createDto.hrId } });
+  if (!hr) throw new NotFoundException('HR not found');
+
+  const task = new Task();
+  task.title = createDto.title;
+  task.description = createDto.description;
+  task.dueDate = new Date(createDto.dueDate);
+  task.status = TaskStatus.PENDING;
+  task.submissionUrl = createDto.submissionUrl || null;
+  task.assignedBy = admin;
+  task.assignedTo = hr;
+
+  return this.taskRepo.save(task);
+}
+
+async getAdminTasks(adminId: string): Promise<Task[]> {
+  return this.taskRepo.find({
+    where: { assignedBy: { adminId } },
+    relations: ['assignedTo'],
+    order: { assignDate: 'DESC' }
+  });
+}
+
+// async updateTaskStatus(
+//   taskId: string,
+//   updateDto: UpdateTaskDto
+// ): Promise<Task> {
+//   const task = await this.taskRepo.findOne({ where: { id: taskId } });
+//   if (!task) throw new NotFoundException('Task not found');
+
+//   if (updateDto.status) task.status = updateDto.status;
+//   if (updateDto.submissionUrl) task.submissionUrl = updateDto.submissionUrl;
+  
+//   return this.taskRepo.save(task);
+// }
+
+async updateTask(
+  taskId: string,
+  updateDto: UpdateTaskDto
+): Promise<Task> {
+  const task = await this.taskRepo.findOne({ where: { id: taskId } });
+  if (!task) throw new NotFoundException('Task not found');
+
+  // Simply update with the provided string
+  if (updateDto.submissionUrl !== undefined) {
+    task.submissionUrl = updateDto.submissionUrl;
+  }
+
+  return this.taskRepo.save(task);
+}
+
+
+
+//add hr
+async createHr(createDto:CreateHrDto):Promise<HrEntity> {
+
+  const hr=this.hrRepo.create({
+    ...createDto,
+    isWorking:createDto.isWorking?? false
+  });
+  return this.hrRepo.save(hr);
+
+
+}
+
+  async getAllHr(): Promise<HrEntity[]> {
+    return this.hrRepo.find();
+  }
+
+  async getHrById(id:number):Promise<HrEntity>{
+    const hr=await this.hrRepo.findOne({where:{id}});
+    if(!hr){
+      throw new NotFoundException(`Hr with id ${id} not found`);
+    }
+    return hr;
+
+  }
+
+
+  async updateHr(id:number,updateDto:UpdateHrDto):Promise<HrEntity>{
+    const hr= await this.hrRepo.findOne({where:{id}});
+    if(!hr){
+      throw new NotFoundException(`Hr with id ${id} not found`);
+    }
+    Object.assign(hr,{...updateDto});
+    return this.hrRepo.save(hr);
+
+  }
+
+  // admin.service.ts
+
+// async deleteHrByEmail(email: string): Promise<void> {
+  
+//   const hr = await this.hrRepo.findOne({ where: { email } });
+//   if (!hr) {
+//     throw new NotFoundException(`HR with email ${email} not found`);
+//   }
+
+//   const result = await this.hrRepo.delete(hr.id);
+//   if (result.affected === 0) {
+//     throw new NotFoundException(`HR with email ${email} not found`);
+//   }
+
+// }
+
+
+
+//get all employee
+async getAllEmployees(): Promise<Employees[]> {
+    return this.employeeRepo.find({
+      select: ['id', 'fullName', 'email', 'status', 'gender','phoneNumber'],
+      order: { fullName: 'ASC' }
+    });
+  }
+
+
+
+  //assign task to employee
+
+
+//    async createEmployeeTask(adminId: string, createDto: CreateEmployeeTaskDto): Promise<EmployeeTask> {
+//   const admin = await this.adminRepo.findOne({ where: { adminId } });
+//   if (!admin) throw new NotFoundException('Admin not found');
+
+//   // const employee = await this.employeeRepo.findOne({ 
+//   //   where: { id: createDto.employeeId } // Now matches number type
+//   // });
+  
+//   const employee = await this.employeeRepo.findOne({
+//     where: { id: createDto.employeeId },
+//   });
+//   if (!employee) throw new NotFoundException('Employee not found');
+//   const task = this.employeeTaskRepo.create({
+//     title: createDto.title,
+//     description: createDto.description,
+//     url: createDto.url || null, // Explicitly set to null if undefined
+//     dueDate: new Date(createDto.dueDate),
+//     assignedBy: admin,
+//     assignedTo: employee,
+//     status: EmployeeTaskStatus.PENDING
+//   });
+
+//   return await this.employeeTaskRepo.save(task); // Add await here
+// }
+
+
+
+async createEmployeeTask(adminId: string, createDto: CreateEmployeeTaskDto): Promise<EmployeeTask> {
+  const admin = await this.adminRepo.findOne({ where: { adminId } });
+  if (!admin) throw new NotFoundException('Admin not found');
+
+  const employee = await this.employeeRepo.findOne({
+    where: { id: createDto.employeeId },
+  });
+  if (!employee) throw new NotFoundException('Employee not found');
+
+  const task = this.employeeTaskRepo.create({
+    title: createDto.title,
+    description: createDto.description,
+    url: createDto.url || null, // Explicitly set to null if undefined
+    dueDate: new Date(createDto.dueDate),
+    assignedBy: admin,
+    assignedTo: employee,
+    status: EmployeeTaskStatus.PENDING
+  });
+
+  return await this.employeeTaskRepo.save(task);
+
+}
+
+
+
+async getAdminEmployeeTasks(adminId: string): Promise<EmployeeTask[]> {
+  return this.employeeTaskRepo.find({
+    where: { assignedBy: { adminId } },
+    relations: ['assignedTo'],
+    order: { assignedAt: 'DESC' }
+  });
+}
+
+async getEmployeeTasks(employeeId: number): Promise<EmployeeTask[]> {
+  return this.employeeTaskRepo.find({
+    where: { assignedTo: { id: employeeId } },
+    relations: ['assignedBy'],
+    order: { dueDate: 'ASC' }
+  });
+}
+
+async submitEmployeeTask(taskId: string, submitDto: SubmitEmployeeTaskDto): Promise<EmployeeTask> {
+  const task = await this.employeeTaskRepo.findOne({ where: { id: taskId } });
+  if (!task) throw new NotFoundException('Task not found');
+
+  task.submissionUrl = submitDto.submissionUrl;
+  task.status = EmployeeTaskStatus.SUBMITTED;
+  task.submittedAt = new Date();
+
+  return this.employeeTaskRepo.save(task);
+}
+
+async updateEmployeeTask(taskId: string, updateDto: UpdateEmployeeTaskDto): Promise<EmployeeTask> {
+  const task = await this.employeeTaskRepo.findOne({ where: { id: taskId } });
+  if (!task) throw new NotFoundException('Task not found');
+
+  if (updateDto.submissionUrl) {
+    task.submissionUrl = updateDto.submissionUrl;
+  }
+  if (updateDto.status) {
+    task.status = updateDto.status;
+    if (updateDto.status === EmployeeTaskStatus.SUBMITTED && !task.submittedAt) {
+      task.submittedAt = new Date();
+    }
+  }
+
+  return this.employeeTaskRepo.save(task);
+}
+
+
+
+ async getEmployeeTaskById(taskId: string): Promise<EmployeeTask> {
+    const task = await this.employeeTaskRepo.findOne({
+      where: { id: taskId },
+      relations: ['assignedTo', 'assignedBy']
+    });
+    
+    if (!task) throw new NotFoundException('Task not found');
+    
+    return task;
+  }
+
+
+
+
+ async deleteEmployeeTask(taskId: string): Promise<void> {
+  try {
+    const task = await this.employeeTaskRepo.findOne({ where: { id: taskId } });
+    if (!task) throw new NotFoundException('Task not found');
+    
+    await this.employeeTaskRepo.remove(task);
+  } catch (error) {
+    console.error(`Error deleting task ${taskId}:`, error);
+    throw new InternalServerErrorException('Failed to delete task');
+  }
+}
+
+// send email 
+// async sendEmail(to: string, subject: string, text: string) {
+//   try {
+//     console.log('Attempting to send email to:', to);
+//     await this.emailService.sendEmail(to, subject, text);
+//     console.log('Email sent successfully');
+//   } catch (error) {
+//     console.error('Email sending failed with details:', {
+//       error: error.message,
+//       stack: error.stack,
+//       response: error.response // For SMTP errors
+//     });
+//     throw new Error(`Email sending failed: ${error.message}`);
+//   }
+// }
+
+
+async sendEmail(to: string, subject: string, text: string) {
+    try {
+      console.log('Attempting to send email to:', to);
+      await this.emailService.sendEmail(to, subject, text);
+      console.log('Email sent successfully');
+      
+      // Trigger Pusher event
+      pusher.trigger('email-channel', 'email-sent', {
+        to,
+        subject,
+        message: 'Email sent successfully'
+      });
+      
+    } catch (error) {
+      console.error('Email sending failed with details:', {
+        error: error.message,
+        stack: error.stack,
+        response: error.response // For SMTP errors
+      });
+      
+      // Trigger error event if needed
+      pusher.trigger('email-channel', 'email-error', {
+        to,
+        error: error.message
+      });
+      
+      throw new Error(`Email sending failed: ${error.message}`);
+    }
+  }
+
+// session login 
+
+// async login(email: string, password: string, req: any): Promise<{ role: string, user: any }> {
+//   // Normalize email input
+//   email = email.toLowerCase().trim();
+  
+//   // 1. Try Admin Login
+//   if (email.endsWith('.xyz')) {
+//     const admin = await this.adminRepo.findOne({ 
+//       where: { Email: email },
+//       select: ['adminId', 'Email', 'password', 'fullName']
+//     });
+    
+//     if (admin && await bcrypt.compare(password, admin.password)) {
+//       req.session.user = {
+//         id: admin.adminId,
+//         email: admin.Email,
+//         role: 'admin',
+//         fullName: admin.fullName
+//       };
+//       return { role: 'admin', user: admin };
+//     }
+//   }
+  
+//   // 2. Try Employee Login
+//   if (email.endsWith('@aiub.edu')) {
+//     const employee = await this.employeeRepo.findOne({ 
+//       where: { email },
+//       select: ['id', 'email', 'password', 'fullName', 'status']
+//     });
+    
+//     if (employee && await bcrypt.compare(password, employee.password)) {
+//       if (employee.status !== 'active') {
+//         throw new UnauthorizedException('Account is inactive');
+//       }
+      
+//       req.session.user = {
+//         id: employee.id,
+//         email: employee.email,
+//         role: 'employee',
+//         fullName: employee.fullName
+//       };
+//       return { role: 'employee', user: employee };
+//     }
+//   }
+  
+//   // 3. Try HR Login
+//   const hr = await this.hrRepo.findOne({ 
+//     where: { email },
+//     select: ['id', 'email', 'password', 'fullName', 'isWorking']
+//   });
+  
+//   if (hr && await bcrypt.compare(password, hr.password)) {
+//     if (!hr.isWorking) {
+//       throw new UnauthorizedException('HR account is deactivated');
+//     }
+    
+//     req.session.user = {
+//       id: hr.id,
+//       email: hr.email,
+//       role: 'hr',
+//       fullName: hr.fullName
+//     };
+//     return { role: 'hr', user: hr };
+//   }
+  
+//   throw new UnauthorizedException('Invalid credentials');
+// } 
+
+async login(email: string, password: string, req: any): Promise<{ role: string, user: any }> {
+  // Validate input
+  if (!email || !password) {
+    throw new BadRequestException('Email and password are required');
+  }
+
+  // Normalize email
+  email = email.toLowerCase().trim();
+  
+  try {
+    // 1. Try Admin Login (.xyz domain)
+    if (email.endsWith('.xyz')) {
+      const admin = await this.adminRepo.findOne({ 
+        where: { Email: email },
+        select: ['adminId', 'Email', 'password', 'fullName', 'isActive']
+      });
+
+      if (admin) {
+        if (!admin.isActive) {
+          throw new UnauthorizedException('Admin account is inactive');
+        }
+
+        const isMatch = await bcrypt.compare(password, admin.password);
+        if (isMatch) {
+          req.session.user = {
+            id: admin.adminId,
+            email: admin.Email,
+            role: 'admin',
+            fullName: admin.fullName
+          };
+          return { 
+            role: 'admin', 
+            user: {
+              id: admin.adminId,
+              email: admin.Email,
+              fullName: admin.fullName
+            }
+          };
+        }
+      }
+    }
+
+    // 2. Try Employee Login (@aiub.edu domain)
+    if (email.endsWith('@aiub.edu')) {
+      const employee = await this.employeeRepo.findOne({ 
+        where: { email },
+        select: ['id', 'email', 'password', 'fullName', 'status']
+      });
+
+      if (employee) {
+        if (employee.status !== 'active') {
+          throw new UnauthorizedException('Employee account is inactive');
+        }
+
+        const isMatch = await bcrypt.compare(password, employee.password);
+        if (isMatch) {
+          req.session.user = {
+            id: employee.id,
+            email: employee.email,
+            role: 'employee',
+            fullName: employee.fullName
+          };
+          return { 
+            role: 'employee',
+            user: {
+              id: employee.id,
+              email: employee.email,
+              fullName: employee.fullName
+            }
+          };
+        }
+      }
+    }
+
+    // 3. Try HR Login (all other emails)
+    const hr = await this.hrRepo.findOne({ 
+      where: { email },
+      select: ['id', 'email', 'password', 'fullName', 'isWorking']
+    });
+
+    if (hr) {
+      if (!hr.isWorking) {
+        throw new UnauthorizedException('HR account is deactivated');
+      }
+
+      const isMatch = await bcrypt.compare(password, hr.password);
+      if (isMatch) {
+        req.session.user = {
+          id: hr.id,
+          email: hr.email,
+          role: 'hr',
+          fullName: hr.fullName
+        };
+        return { 
+          role: 'hr',
+          user: {
+            id: hr.id,
+            email: hr.email,
+            fullName: hr.fullName
+          }
+        };
+      }
+    }
+
+    // If no user found or password mismatch
+    throw new UnauthorizedException('Invalid credentials');
+
+  } catch (error) {
+    console.error('Login error:', error);
+    if (error instanceof UnauthorizedException) {
+      throw error; // Re-throw auth errors
+    }
+    throw new InternalServerErrorException('Login processing failed');
+  }
+}
+
+  logout(req: any): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      req.session.destroy((err) => {
+        if (err) {
+          reject(false);
+        } else {
+          resolve(true);
+        }
+      });
+    });
+  }
+
+  getSessionUser(req: any): any {
+    return req.session.user || null;
+  }
+}
+
+
