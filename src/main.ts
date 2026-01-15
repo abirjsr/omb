@@ -40,10 +40,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   
   // CORS for frontend on port 1900
-  app.enableCors({
-    origin: 'http://localhost:1900', // Your frontend port
-    credentials: true,
-  });
+  app.enableCors();
 
   // Session middleware
   app.use(
@@ -61,7 +58,7 @@ async function bootstrap() {
 
   app.useGlobalPipes(new ValidationPipe());
   
-  await app.listen(9001);
+  await app.listen(3000);
   console.log('Backend running on http://localhost:9001');
 }
 bootstrap();
